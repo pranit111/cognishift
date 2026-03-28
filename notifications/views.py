@@ -1,8 +1,9 @@
 from django.utils import timezone
+from django.views.decorators.csrf import csrf_exempt
 from rest_framework import status
-from rest_framework.decorators import api_view
+from rest_framework.decorators import api_view, authentication_classes, permission_classes
 from rest_framework.response import Response
-
+from rest_framework.permissions import AllowAny
 from .ai_service import classify_and_infer, apply_decision_rules, _get_time_of_day
 from .models import User, AppSession, ScheduleBlock, NotificationEvent, DecisionLog, UserInteractionLog, PhoneOTP
 from .pipeline import run_pipeline, _build_context, drain_queue
@@ -11,9 +12,10 @@ from .serializers import UserSerializer, DecisionLogSerializer, NotificationEven
 from .simulation import run_simulation_step
 
 USER_NOT_FOUND = 'User not found.'
-
-
+@csrf_exempt
 @api_view(['POST'])
+@authentication_classes([])  
+@permission_classes([AllowAny])
 def generate_event(request):
     """
     POST /api/generate-event/
@@ -291,25 +293,54 @@ def telegram_link(request, user_id):
     })
 
 
+def _generate_and_send_otp(phone: str) -> None:
+    """Create a fresh OTP record and dispatch the SMS."""
+    import random
+    from .sms import sms_service
+    otp = f"{random.randint(0, 999999):06d}"
+    PhoneOTP.objects.create(phone=phone, otp=otp)
+    sms_service.send_otp(phone, otp)
+
+
+def _verify_otp_record(phone: str, otp: str):
+    """Return the PhoneOTP record if valid, else None."""
+    from datetime import timedelta
+    expiry = timezone.now() - timedelta(minutes=10)
+    return PhoneOTP.objects.filter(
+        phone=phone,
+        otp=otp,
+        is_verified=False,
+        created_at__gte=expiry,
+    ).first()
+
+
+def _make_jwt(user) -> str:
+    """Sign a JWT containing user_id and phone."""
+    import jwt
+    from django.conf import settings
+    payload = {
+        'user_id': str(user.id),
+        'phone': user.phone_no,
+    }
+    return jwt.encode(payload, settings.SECRET_KEY, algorithm='HS256')
+
+
+# ── Registration OTP ────────────────────────────────────────────────────────
+
 @api_view(['POST'])
 def send_otp(request):
     """
     POST /api/auth/send-otp/
-    Body: { phone }
-    Generates a 6-digit OTP, saves it, and sends via SMS.
+    Registration: phone must NOT already exist.
     """
-    import random
-    from .sms import sms_service
-
     phone = request.data.get('phone', '').strip()
     if not phone:
         return Response({'error': 'phone is required.'}, status=400)
 
-    otp = f"{random.randint(0, 999999):06d}"
-    PhoneOTP.objects.create(phone=phone, otp=otp)
+    if User.objects.filter(phone_no=phone).exists():
+        return Response({'error': 'An account with this phone number already exists.'}, status=409)
 
-    sms_service.send_otp(phone, otp)
-
+    _generate_and_send_otp(phone)
     return Response({'sent': True})
 
 
@@ -317,25 +348,54 @@ def send_otp(request):
 def verify_otp(request):
     """
     POST /api/auth/verify-otp/
-    Body: { phone, otp }
-    Verifies the OTP. Returns verified status + whether a user account exists for this phone.
+    Registration OTP verification. Returns verified flag only (no token — user not created yet).
     """
-    from datetime import timedelta
-
     phone = request.data.get('phone', '').strip()
-    otp = request.data.get('otp', '').strip()
-
+    otp   = request.data.get('otp', '').strip()
     if not phone or not otp:
         return Response({'error': 'phone and otp are required.'}, status=400)
 
-    expiry = timezone.now() - timedelta(minutes=10)
-    record = PhoneOTP.objects.filter(
-        phone=phone,
-        otp=otp,
-        is_verified=False,
-        created_at__gte=expiry,
-    ).first()
+    record = _verify_otp_record(phone, otp)
+    if not record:
+        return Response({'error': 'Invalid or expired OTP.'}, status=400)
 
+    record.is_verified = True
+    record.save(update_fields=['is_verified'])
+
+    return Response({'verified': True})
+
+
+# ── Login OTP ───────────────────────────────────────────────────────────────
+
+@api_view(['POST'])
+def send_login_otp(request):
+    """
+    POST /api/auth/login/send-otp/
+    Login: phone MUST exist.
+    """
+    phone = request.data.get('phone', '').strip()
+    if not phone:
+        return Response({'error': 'phone is required.'}, status=400)
+
+    if not User.objects.filter(phone_no=phone).exists():
+        return Response({'error': 'No account found with this phone number.'}, status=404)
+
+    _generate_and_send_otp(phone)
+    return Response({'sent': True})
+
+
+@api_view(['POST'])
+def login_verify_otp(request):
+    """
+    POST /api/auth/login/verify-otp/
+    Verify login OTP. Returns JWT token + user info on success.
+    """
+    phone = request.data.get('phone', '').strip()
+    otp   = request.data.get('otp', '').strip()
+    if not phone or not otp:
+        return Response({'error': 'phone and otp are required.'}, status=400)
+
+    record = _verify_otp_record(phone, otp)
     if not record:
         return Response({'error': 'Invalid or expired OTP.'}, status=400)
 
@@ -343,8 +403,13 @@ def verify_otp(request):
     record.save(update_fields=['is_verified'])
 
     user = User.objects.filter(phone_no=phone).first()
+    if not user:
+        return Response({'error': 'Account not found.'}, status=404)
+
+    token = _make_jwt(user)
     return Response({
-        'verified': True,
-        'user_exists': bool(user),
-        'user_id': str(user.id) if user else None,
+        'token': token,
+        'user_id': str(user.id),
+        'name': user.name,
+        'role': user.role,
     })
