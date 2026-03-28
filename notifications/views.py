@@ -1,6 +1,8 @@
 from django.utils import timezone
+from django.views.decorators.csrf import csrf_exempt
 from rest_framework import status
-from rest_framework.decorators import api_view
+from rest_framework.decorators import api_view, authentication_classes, permission_classes
+from rest_framework.permissions import AllowAny
 from rest_framework.response import Response
 
 from .ai_service import classify_and_infer, apply_decision_rules, _get_time_of_day
@@ -13,7 +15,10 @@ from .simulation import run_simulation_step
 USER_NOT_FOUND = 'User not found.'
 
 
+@csrf_exempt
 @api_view(['POST'])
+@authentication_classes([])
+@permission_classes([AllowAny])
 def generate_event(request):
     """
     POST /api/generate-event/

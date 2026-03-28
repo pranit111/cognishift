@@ -157,6 +157,12 @@ CORS_ALLOWED_ORIGINS = [
     'http://127.0.0.1:5173',
 ]
 
+# Allow the browser extension origin in development.
+# Extension IDs are only known after loading unpacked, so we open CORS fully
+# under DEBUG. In production, replace with the real chrome-extension://<id>.
+if DEBUG:
+    CORS_ALLOW_ALL_ORIGINS = True
+
 JAZZMIN_SETTINGS = {
     # Header / branding
     'site_title': 'Cognishift Admin',
