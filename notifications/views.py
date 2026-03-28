@@ -4,9 +4,9 @@ from rest_framework.decorators import api_view
 from rest_framework.response import Response
 
 from .ai_service import classify_and_infer, apply_decision_rules, _get_time_of_day
-from .models import User, AppSession, ScheduleBlock, NotificationEvent, DecisionLog, UserInteractionLog
-from .pipeline import run_pipeline, _build_context
-from .pipeline import drain_queue
+from .models import User, AppSession, ScheduleBlock, NotificationEvent, DecisionLog, UserInteractionLog, PhoneOTP
+from .pipeline import run_pipeline, _build_context, drain_queue
+from .telegram import get_deep_link
 from .serializers import UserSerializer, DecisionLogSerializer, NotificationEventSerializer
 from .simulation import run_simulation_step
 
@@ -270,3 +270,81 @@ def log_interaction(request):
         return Response({'error': USER_NOT_FOUND}, status=404)
     except NotificationEvent.DoesNotExist:
         return Response({'error': 'Notification not found.'}, status=404)
+
+
+@api_view(['GET'])
+def telegram_link(request, user_id):
+    """
+    GET /api/users/<id>/telegram-link/
+    Returns the deep link the user clicks to connect their Telegram account.
+    Also shows whether the account is already linked.
+    """
+    try:
+        user = User.objects.get(id=user_id)
+    except User.DoesNotExist:
+        return Response({'error': USER_NOT_FOUND}, status=404)
+
+    return Response({
+        'link': get_deep_link(str(user.id)),
+        'linked': bool(user.telegram_chat_id),
+        'chat_id': user.telegram_chat_id or None,
+    })
+
+
+@api_view(['POST'])
+def send_otp(request):
+    """
+    POST /api/auth/send-otp/
+    Body: { phone }
+    Generates a 6-digit OTP, saves it, and sends via SMS.
+    """
+    import random
+    from .sms import sms_service
+
+    phone = request.data.get('phone', '').strip()
+    if not phone:
+        return Response({'error': 'phone is required.'}, status=400)
+
+    otp = f"{random.randint(0, 999999):06d}"
+    PhoneOTP.objects.create(phone=phone, otp=otp)
+
+    sms_service.send_otp(phone, otp)
+
+    return Response({'sent': True})
+
+
+@api_view(['POST'])
+def verify_otp(request):
+    """
+    POST /api/auth/verify-otp/
+    Body: { phone, otp }
+    Verifies the OTP. Returns verified status + whether a user account exists for this phone.
+    """
+    from datetime import timedelta
+
+    phone = request.data.get('phone', '').strip()
+    otp = request.data.get('otp', '').strip()
+
+    if not phone or not otp:
+        return Response({'error': 'phone and otp are required.'}, status=400)
+
+    expiry = timezone.now() - timedelta(minutes=10)
+    record = PhoneOTP.objects.filter(
+        phone=phone,
+        otp=otp,
+        is_verified=False,
+        created_at__gte=expiry,
+    ).first()
+
+    if not record:
+        return Response({'error': 'Invalid or expired OTP.'}, status=400)
+
+    record.is_verified = True
+    record.save(update_fields=['is_verified'])
+
+    user = User.objects.filter(phone_no=phone).first()
+    return Response({
+        'verified': True,
+        'user_exists': bool(user),
+        'user_id': str(user.id) if user else None,
+    })

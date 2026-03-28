@@ -11,6 +11,7 @@ from .models import (
     NotificationEvent, UserInteractionLog, DecisionLog,
 )
 from .ai_service import classify_and_infer, apply_decision_rules, _get_time_of_day
+from .telegram import send_message, format_notification
 
 
 def _build_context(user: User, source_app: str, message: str) -> dict:
@@ -112,7 +113,32 @@ def run_pipeline(user_id: str, source_app: str, message: str) -> dict:
     notif.status = status_map[decision]
     notif.save(update_fields=['status'])
 
-    # 7. Log the decision
+    # 7. Send Telegram notification if decision is send and user has linked their account
+    if decision == 'send' and user.telegram_chat_id:
+        try:
+            text = format_notification(
+                source_app=source_app,
+                message=message,
+                priority=priority,
+                category=category,
+                decision=decision,
+                inferred_mode=inferred_mode,
+            )
+            ok = send_message(user.telegram_chat_id, text)
+            if not ok:
+                print(f"[Pipeline] Telegram send failed for user {user.name} chat_id={user.telegram_chat_id}")
+        except Exception as tg_err:
+            print(f"[Pipeline] Telegram error: {tg_err}")
+
+    # 7b. Send SMS for high-priority notifications
+    if decision == 'send' and priority == 'high' and user.phone_no:
+        try:
+            from .sms import sms_service
+            sms_service.send_notification(user.phone_no, source_app, message, priority)
+        except Exception as sms_err:
+            print(f"[Pipeline] SMS error: {sms_err}")
+
+    # 8. Log the decision
     session = ctx['_session']
     block = ctx['_block']
     DecisionLog.objects.create(
@@ -162,4 +188,15 @@ def drain_queue(user: User, new_mode: str) -> list:
                 'ai_priority': notif.ai_priority,
                 'ai_category': notif.ai_category,
             })
+            # Deliver queued notification via Telegram
+            if user.telegram_chat_id:
+                text = format_notification(
+                    source_app=notif.source_app,
+                    message=notif.message,
+                    priority=notif.ai_priority or 'medium',
+                    category=notif.ai_category or 'work',
+                    decision='send',
+                    inferred_mode=new_mode,
+                )
+                send_message(user.telegram_chat_id, text)
     return delivered

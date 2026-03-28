@@ -39,6 +39,17 @@ GEMINI_API_KEY = os.getenv('GEMINI_API_KEY', '')
 
 # Telegram (optional)
 TELEGRAM_BOT_TOKEN = os.getenv('TELEGRAM_BOT_TOKEN', '')
+TELEGRAM_BOT_USERNAME = os.getenv('TELEGRAM_BOT_USERNAME', 'CogniShiftBot')
+
+# SMS via kutility.org
+SMS_ENABLED = os.getenv('SMS_ENABLED', 'True') == 'True'
+SMS_API_URL = os.getenv('SMS_API_URL', 'https://kutility.org/app/smsapi/index.php')
+SMS_API_KEY = os.getenv('SMS_API_KEY', '')
+SMS_CAMPAIGN = os.getenv('SMS_CAMPAIGN', '14892')
+SMS_ROUTE_ID = os.getenv('SMS_ROUTE_ID', '7')
+SMS_SENDER_ID = os.getenv('SMS_SENDER_ID', 'DJKATI')
+SMS_TEMPLATE_ID = os.getenv('SMS_TEMPLATE_ID', '')
+SMS_PE_ID = os.getenv('SMS_PE_ID', '')
 
 # Application definition
 
@@ -142,6 +153,7 @@ DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
 # CORS — allow React dev server
 CORS_ALLOWED_ORIGINS = [
     'http://localhost:5173',
+    'http://localhost:8080',
     'http://127.0.0.1:5173',
 ]
 

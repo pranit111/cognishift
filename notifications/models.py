@@ -21,6 +21,7 @@ class User(models.Model):
     persona_description = models.TextField()
     notification_pref = models.CharField(max_length=20, choices=NOTIF_PREF_CHOICES, default='all')
     telegram_chat_id = models.CharField(max_length=100, blank=True, default='')
+    phone_no = models.CharField(max_length=20, blank=True, default='')
 
     MANUAL_MODE_CHOICES = [
         ('auto', 'Auto'),
@@ -166,3 +167,16 @@ class DecisionLog(models.Model):
 
     def __str__(self):
         return f"{self.user.name} → {self.decision} ({self.inferred_mode})"
+
+
+class PhoneOTP(models.Model):
+    phone = models.CharField(max_length=20)
+    otp = models.CharField(max_length=6)
+    created_at = models.DateTimeField(auto_now_add=True)
+    is_verified = models.BooleanField(default=False)
+
+    class Meta:
+        ordering = ['-created_at']
+
+    def __str__(self):
+        return f"{self.phone} — {'verified' if self.is_verified else 'pending'}"
