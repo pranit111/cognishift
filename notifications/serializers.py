@@ -20,7 +20,12 @@ class UserSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = User
-        fields = ['id', 'name', 'role', 'persona_description', 'notification_pref', 'active_app', 'current_block']
+        fields = [
+            'id', 'name', 'role', 'persona_description',
+            'notification_pref', 'manual_mode',
+            'active_app', 'current_block',
+        ]
+        read_only_fields = ['id', 'active_app', 'current_block']
 
     def get_active_app(self, obj):
         session = obj.app_sessions.filter(is_active=True).first()
@@ -36,7 +41,7 @@ class UserSerializer(serializers.ModelSerializer):
 class NotificationEventSerializer(serializers.ModelSerializer):
     class Meta:
         model = NotificationEvent
-        fields = ['id', 'user', 'source_app', 'message', 'triggered_at', 'ai_priority', 'ai_category']
+        fields = ['id', 'user', 'source_app', 'message', 'triggered_at', 'ai_priority', 'ai_category', 'status']
 
 
 class DecisionLogSerializer(serializers.ModelSerializer):

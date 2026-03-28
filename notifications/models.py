@@ -22,6 +22,16 @@ class User(models.Model):
     notification_pref = models.CharField(max_length=20, choices=NOTIF_PREF_CHOICES, default='all')
     telegram_chat_id = models.CharField(max_length=100, blank=True, default='')
 
+    MANUAL_MODE_CHOICES = [
+        ('auto', 'Auto'),
+        ('focus', 'Focus'),
+        ('work', 'Work'),
+        ('meeting', 'Meeting'),
+        ('relax', 'Relax'),
+        ('sleep', 'Sleep'),
+    ]
+    manual_mode = models.CharField(max_length=10, choices=MANUAL_MODE_CHOICES, default='auto')
+
     def __str__(self):
         return f"{self.name} ({self.role})"
 
@@ -90,6 +100,15 @@ class NotificationEvent(models.Model):
     triggered_at = models.DateTimeField(auto_now_add=True)
     ai_priority = models.CharField(max_length=10, choices=PRIORITY_CHOICES, blank=True, default='')
     ai_category = models.CharField(max_length=10, choices=CATEGORY_CHOICES, blank=True, default='')
+
+    STATUS_CHOICES = [
+        ('pending', 'Pending'),
+        ('sent', 'Sent'),
+        ('blocked', 'Blocked'),
+        ('queued', 'Queued'),
+        ('delivered', 'Delivered'),
+    ]
+    status = models.CharField(max_length=10, choices=STATUS_CHOICES, default='pending')
 
     def __str__(self):
         return f"[{self.source_app}] {self.message[:50]}"

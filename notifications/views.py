@@ -6,7 +6,8 @@ from rest_framework.response import Response
 from .ai_service import classify_and_infer, apply_decision_rules, _get_time_of_day
 from .models import User, AppSession, ScheduleBlock, NotificationEvent, DecisionLog, UserInteractionLog
 from .pipeline import run_pipeline, _build_context
-from .serializers import UserSerializer, DecisionLogSerializer
+from .pipeline import drain_queue
+from .serializers import UserSerializer, DecisionLogSerializer, NotificationEventSerializer
 from .simulation import run_simulation_step
 
 USER_NOT_FOUND = 'User not found.'
@@ -113,14 +114,108 @@ def decision(request):
     return Response({'decision': result['decision'], 'delay_minutes': result['delay_minutes']})
 
 
-@api_view(['GET'])
+@api_view(['GET', 'POST'])
 def list_users(request):
     """
-    GET /api/users/
-    Returns all users with their current active app and schedule block.
+    GET  /api/users/  — list all users
+    POST /api/users/  — create a new user
+    Body: { name, role, persona_description, notification_pref }
     """
+    if request.method == 'POST':
+        serializer = UserSerializer(data=request.data)
+        if serializer.is_valid():
+            user = serializer.save()
+            return Response(UserSerializer(user).data, status=status.HTTP_201_CREATED)
+        return Response(serializer.errors, status=400)
+
     users = User.objects.prefetch_related('app_sessions', 'schedule_blocks').all()
     serializer = UserSerializer(users, many=True)
+    return Response(serializer.data)
+
+
+@api_view(['GET', 'PATCH'])
+def user_detail(request, user_id):
+    """
+    GET   /api/users/<id>/  — get profile
+    PATCH /api/users/<id>/  — update profile fields (name, role, persona_description,
+                               notification_pref, manual_mode)
+    """
+    try:
+        user = User.objects.get(id=user_id)
+    except User.DoesNotExist:
+        return Response({'error': USER_NOT_FOUND}, status=404)
+
+    if request.method == 'PATCH':
+        serializer = UserSerializer(user, data=request.data, partial=True)
+        if serializer.is_valid():
+            serializer.save()
+            return Response(UserSerializer(user).data)
+        return Response(serializer.errors, status=400)
+
+    return Response(UserSerializer(user).data)
+
+
+@api_view(['POST'])
+def set_mode(request, user_id):
+    """
+    POST /api/users/<id>/set-mode/
+    Body: { mode: "relax" }   (or "auto" to return to AI inference)
+    Sets manual_mode, then drains the queue with the new mode.
+    Returns: { mode, drained: [...delivered notifications] }
+    """
+    try:
+        user = User.objects.get(id=user_id)
+    except User.DoesNotExist:
+        return Response({'error': USER_NOT_FOUND}, status=404)
+
+    mode = request.data.get('mode')
+    valid_modes = ['auto', 'focus', 'work', 'meeting', 'relax', 'sleep']
+    if mode not in valid_modes:
+        return Response({'error': f'mode must be one of {valid_modes}'}, status=400)
+
+    user.manual_mode = mode
+    user.save(update_fields=['manual_mode'])
+
+    # Drain queue using the new mode (skip drain if switching back to auto)
+    drained = drain_queue(user, mode) if mode != 'auto' else []
+
+    return Response({'mode': mode, 'drained': drained})
+
+
+@api_view(['GET'])
+def user_queue(request, user_id):
+    """
+    GET /api/users/<id>/queue/
+    Returns all queued notifications for the user (status=queued).
+    """
+    try:
+        user = User.objects.get(id=user_id)
+    except User.DoesNotExist:
+        return Response({'error': USER_NOT_FOUND}, status=404)
+
+    queued = NotificationEvent.objects.filter(user=user, status='queued').order_by('-triggered_at')
+    serializer = NotificationEventSerializer(queued, many=True)
+    return Response(serializer.data)
+
+
+@api_view(['GET'])
+def user_notifications(request, user_id):
+    """
+    GET /api/users/<id>/notifications/
+    Returns all notifications for the user with their status.
+    Optional query param: ?status=queued|sent|blocked|delivered|pending
+    """
+    try:
+        user = User.objects.get(id=user_id)
+    except User.DoesNotExist:
+        return Response({'error': USER_NOT_FOUND}, status=404)
+
+    qs = NotificationEvent.objects.filter(user=user).order_by('-triggered_at')
+    filter_status = request.query_params.get('status')
+    if filter_status:
+        qs = qs.filter(status=filter_status)
+
+    serializer = NotificationEventSerializer(qs[:100], many=True)
     return Response(serializer.data)
 
 

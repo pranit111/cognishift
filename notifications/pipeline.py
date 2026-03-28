@@ -81,12 +81,20 @@ def run_pipeline(user_id: str, source_app: str, message: str) -> dict:
         message=message,
     )
 
-    # 3. AI: classify + infer mode in one call
-    ai_result = classify_and_infer(ctx)
-    priority = ai_result.get('priority', 'medium')
-    category = ai_result.get('category', 'work')
-    inferred_mode = ai_result.get('inferred_mode', 'work')
-    ai_reason = ai_result.get('ai_reason', '')
+    # 3. Classify + infer mode
+    # If user has manually set a mode, skip AI inference entirely
+    if user.manual_mode != 'auto':
+        inferred_mode = user.manual_mode
+        ai_result = classify_and_infer(ctx)
+        priority = ai_result.get('priority', 'medium')
+        category = ai_result.get('category', 'work')
+        ai_reason = f"[Manual mode: {inferred_mode}] {ai_result.get('ai_reason', '')}"
+    else:
+        ai_result = classify_and_infer(ctx)
+        priority = ai_result.get('priority', 'medium')
+        category = ai_result.get('category', 'work')
+        inferred_mode = ai_result.get('inferred_mode', 'work')
+        ai_reason = ai_result.get('ai_reason', '')
 
     # 4. Persist classification on the notification
     notif.ai_priority = priority
@@ -99,7 +107,12 @@ def run_pipeline(user_id: str, source_app: str, message: str) -> dict:
     delay_minutes = decision_result['delay_minutes']
     delay_until = (timezone.now() + timedelta(minutes=delay_minutes)) if delay_minutes else None
 
-    # 6. Log the decision
+    # 6. Update notification status
+    status_map = {'send': 'sent', 'delay': 'queued', 'block': 'blocked'}
+    notif.status = status_map[decision]
+    notif.save(update_fields=['status'])
+
+    # 7. Log the decision
     session = ctx['_session']
     block = ctx['_block']
     DecisionLog.objects.create(
@@ -119,6 +132,7 @@ def run_pipeline(user_id: str, source_app: str, message: str) -> dict:
 
     return {
         'notification_id': str(notif.id),
+        'status': notif.status,
         'decision': decision,
         'inferred_mode': inferred_mode,
         'ai_priority': priority,
@@ -126,3 +140,26 @@ def run_pipeline(user_id: str, source_app: str, message: str) -> dict:
         'ai_reason': ai_reason,
         'delay_until': delay_until.isoformat() if delay_until else None,
     }
+
+
+def drain_queue(user: User, new_mode: str) -> list:
+    """
+    Called when user's mode changes.
+    Re-evaluates all queued notifications with the new mode.
+    Any that now pass the rule table are flipped to 'delivered' and returned.
+    """
+    queued = NotificationEvent.objects.filter(user=user, status='queued')
+    delivered = []
+    for notif in queued:
+        result = apply_decision_rules(new_mode, notif.ai_priority or 'medium')
+        if result['decision'] == 'send':
+            notif.status = 'delivered'
+            notif.save(update_fields=['status'])
+            delivered.append({
+                'notification_id': str(notif.id),
+                'source_app': notif.source_app,
+                'message': notif.message,
+                'ai_priority': notif.ai_priority,
+                'ai_category': notif.ai_category,
+            })
+    return delivered
