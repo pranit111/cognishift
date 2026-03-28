@@ -51,6 +51,10 @@ SMS_SENDER_ID = os.getenv('SMS_SENDER_ID', 'DJKATI')
 SMS_TEMPLATE_ID = os.getenv('SMS_TEMPLATE_ID', '')
 SMS_PE_ID = os.getenv('SMS_PE_ID', '')
 
+# Fast2SMS (high-priority notification alerts)
+FAST2SMS_API_URL = os.getenv('FAST2SMS_API_URL', 'https://www.fast2sms.com/dev/bulkV2')
+FAST2SMS_API_KEY = os.getenv('FAST2SMS_API_KEY', '')
+
 # Application definition
 
 INSTALLED_APPS = [

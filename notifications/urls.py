@@ -15,6 +15,8 @@ urlpatterns = [
     path('decisions/', views.list_decisions, name='list-decisions'),
     path('simulate/run/', views.simulate_run, name='simulate-run'),
     path('interactions/', views.log_interaction, name='log-interaction'),
-    path('auth/send-otp/', views.send_otp, name='send-otp'),
-    path('auth/verify-otp/', views.verify_otp, name='verify-otp'),
+    path('auth/send-otp/',         views.send_otp,         name='send-otp'),
+    path('auth/verify-otp/',       views.verify_otp,       name='verify-otp'),
+    path('auth/login/send-otp/',   views.send_login_otp,   name='login-send-otp'),
+    path('auth/login/verify-otp/', views.login_verify_otp, name='login-verify-otp'),
 ]
