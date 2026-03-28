@@ -1,6 +1,6 @@
 """
 AI service: classifies notifications and infers user mode in a single LLM call.
-Supports OpenAI (primary) and Gemini (fallback) based on env vars.
+Uses Groq (llama-3.3-70b-versatile). Falls back to rule-based if Groq fails.
 """
 import json
 import os
@@ -69,11 +69,14 @@ def build_prompt(context: dict) -> str:
     return CLASSIFICATION_PROMPT.format(**context)
 
 
-def call_openai(prompt: str) -> dict:
+def call_groq(prompt: str) -> dict:
     from openai import OpenAI
-    client = OpenAI(api_key=settings.OPENAI_API_KEY)
+    client = OpenAI(
+        api_key=settings.GROQ_API_KEY,
+        base_url="https://api.groq.com/openai/v1",
+    )
     response = client.chat.completions.create(
-        model="gpt-4o-mini",
+        model="llama-3.3-70b-versatile",
         messages=[{"role": "user", "content": prompt}],
         temperature=0.2,
         max_tokens=300,
@@ -81,19 +84,6 @@ def call_openai(prompt: str) -> dict:
     raw = response.choices[0].message.content.strip()
     return json.loads(raw)
 
-
-def call_gemini(prompt: str) -> dict:
-    import google.generativeai as genai
-    genai.configure(api_key=settings.GEMINI_API_KEY)
-    model = genai.GenerativeModel("gemini-1.5-flash")
-    response = model.generate_content(prompt)
-    raw = response.text.strip()
-    # Strip markdown code fences if present
-    if raw.startswith("```"):
-        raw = raw.split("```")[1]
-        if raw.startswith("json"):
-            raw = raw[4:]
-    return json.loads(raw.strip())
 
 
 def classify_and_infer(context: dict) -> dict:
@@ -104,18 +94,11 @@ def classify_and_infer(context: dict) -> dict:
     """
     prompt = build_prompt(context)
 
-    # Try OpenAI first, then Gemini, then rule-based fallback
-    if getattr(settings, 'OPENAI_API_KEY', ''):
+    if getattr(settings, 'GROQ_API_KEY', ''):
         try:
-            return call_openai(prompt)
+            return call_groq(prompt)
         except Exception as e:
-            print(f"[AI] OpenAI failed: {e}")
-
-    if getattr(settings, 'GEMINI_API_KEY', ''):
-        try:
-            return call_gemini(prompt)
-        except Exception as e:
-            print(f"[AI] Gemini failed: {e}")
+            print(f"[AI] Groq failed: {e}")
 
     # Rule-based fallback
     return _rule_based_fallback(context)
