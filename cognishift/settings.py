@@ -43,6 +43,7 @@ TELEGRAM_BOT_TOKEN = os.getenv('TELEGRAM_BOT_TOKEN', '')
 # Application definition
 
 INSTALLED_APPS = [
+    'jazzmin',
     'django.contrib.admin',
     'django.contrib.auth',
     'django.contrib.contenttypes',
@@ -143,6 +144,63 @@ CORS_ALLOWED_ORIGINS = [
     'http://localhost:5173',
     'http://127.0.0.1:5173',
 ]
+
+JAZZMIN_SETTINGS = {
+    # Header / branding
+    'site_title': 'Cognishift Admin',
+    'site_header': 'Cognishift',
+    'site_brand': 'Cognishift',
+    'welcome_sign': 'Welcome to the Cognishift Admin Panel',
+    'copyright': 'Cognishift',
+
+    # Top navigation links
+    'topmenu_links': [
+        {'name': 'Dashboard', 'url': 'admin:index', 'permissions': ['auth.view_user']},
+        {'app': 'notifications'},
+    ],
+
+    # Sidebar icons per model
+    'icons': {
+        'auth': 'fas fa-users-cog',
+        'auth.user': 'fas fa-user',
+        'auth.group': 'fas fa-users',
+        'notifications.user': 'fas fa-user-circle',
+        'notifications.appsession': 'fas fa-desktop',
+        'notifications.scheduleblock': 'fas fa-calendar-alt',
+        'notifications.notificationevent': 'fas fa-bell',
+        'notifications.userinteractionlog': 'fas fa-hand-pointer',
+        'notifications.decisionlog': 'fas fa-brain',
+    },
+    'default_icon_parents': 'fas fa-folder',
+    'default_icon_children': 'fas fa-circle',
+
+    # UI tweaks
+    'show_sidebar': True,
+    'navigation_expanded': True,
+    'hide_apps': [],
+    'hide_models': [],
+    'order_with_respect_to': [
+        'notifications',
+        'notifications.user',
+        'notifications.appsession',
+        'notifications.scheduleblock',
+        'notifications.notificationevent',
+        'notifications.userinteractionlog',
+        'notifications.decisionlog',
+    ],
+
+    # Theme
+    'theme': 'darkly',
+    'dark_mode_theme': 'darkly',
+    'button_classes': {
+        'primary': 'btn-primary',
+        'secondary': 'btn-secondary',
+        'info': 'btn-info',
+        'warning': 'btn-warning',
+        'danger': 'btn-danger',
+        'success': 'btn-success',
+    },
+}
 
 REST_FRAMEWORK = {
     'DEFAULT_RENDERER_CLASSES': ['rest_framework.renderers.JSONRenderer'],
