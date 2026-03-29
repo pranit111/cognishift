@@ -22,10 +22,22 @@ def _build_context(user: User, source_app: str, message: str) -> dict:
     app_name = session.app_name if session else 'unknown'
     app_category = session.app_category if session else 'productivity'
 
-    # Current schedule block
+    # Current schedule block (DB-backed)
     block = user.schedule_blocks.filter(start_time__lte=now, end_time__gte=now).first()
     block_type = block.block_type if block else 'free'
     block_title = block.title if block else 'No scheduled block'
+
+    # Live Google Calendar event (overrides DB block if present)
+    schedule_now = None
+    try:
+        from .calendar_service import get_current_event
+        cal_event = get_current_event(user)
+        if cal_event:
+            block_type  = cal_event['type']
+            block_title = cal_event['current_event']
+            schedule_now = f"Meeting: {cal_event['current_event']}"
+    except Exception as cal_err:
+        print(f'[pipeline] Calendar lookup failed: {cal_err}')
 
     # Recent interactions (last 5)
     recent_logs = UserInteractionLog.objects.filter(
@@ -51,6 +63,7 @@ def _build_context(user: User, source_app: str, message: str) -> dict:
         'app_category': app_category,
         'block_type': block_type,
         'block_title': block_title,
+        'schedule_now': schedule_now,
         'time_of_day': time_of_day,
         'last_interactions': ', '.join(last_interactions) if last_interactions else 'none',
         'recent_ignored_count': recent_ignored_count,

@@ -522,3 +522,131 @@ def login_verify_otp(request):
         'name': user.name,
         'role': user.role,
     })
+
+
+# ── Google Calendar OAuth ───────────────────────────────────────────────────
+# We build the OAuth URLs manually (urllib) and exchange tokens via plain
+# requests.post so that google-auth-oauthlib never injects PKCE behind our back.
+
+_GCAL_SCOPE        = 'https://www.googleapis.com/auth/calendar.readonly'
+_GCAL_AUTH_URI     = 'https://accounts.google.com/o/oauth2/v2/auth'
+_GCAL_TOKEN_URI    = 'https://oauth2.googleapis.com/token'
+_FRONTEND_BASE     = 'http://localhost:8080'
+_FRONTEND_DASHBOARD = f'{_FRONTEND_BASE}/me'
+
+
+@csrf_exempt
+@api_view(['GET'])
+@authentication_classes([])
+@permission_classes([AllowAny])
+def google_auth_init(request, user_id):
+    """
+    GET /api/auth/google/<user_id>/init/
+    Returns the Google OAuth authorization URL (no PKCE).
+    """
+    try:
+        user = User.objects.get(id=user_id)
+    except User.DoesNotExist:
+        return Response({'error': USER_NOT_FOUND}, status=404)
+
+    import urllib.parse
+    params = {
+        'client_id':              settings.GOOGLE_CLIENT_ID,
+        'redirect_uri':           settings.GOOGLE_REDIRECT_URI,
+        'response_type':          'code',
+        'scope':                  _GCAL_SCOPE,
+        'access_type':            'offline',
+        'include_granted_scopes': 'true',
+        'prompt':                 'consent',
+        'state':                  str(user.id),
+    }
+    auth_url = _GCAL_AUTH_URI + '?' + urllib.parse.urlencode(params)
+    return Response({'auth_url': auth_url})
+
+
+@csrf_exempt
+@api_view(['GET'])
+@authentication_classes([])
+@permission_classes([AllowAny])
+def google_auth_callback(request):
+    """
+    GET /api/auth/google/callback/?code=...&state=<user_id>
+    Exchanges the auth code for tokens (plain POST, no PKCE) and stores them.
+    Then redirects to the frontend dashboard.
+    """
+    from django.shortcuts import redirect
+    import datetime
+    import requests as http_requests
+
+    code    = request.query_params.get('code')
+    user_id = request.query_params.get('state')
+    error   = request.query_params.get('error')
+
+    if error:
+        return redirect(f'{_FRONTEND_DASHBOARD}?calendar_error={error}')
+
+    if not code or not user_id:
+        return Response({'error': 'Missing code or state.'}, status=400)
+
+    try:
+        user = User.objects.get(id=user_id)
+    except User.DoesNotExist:
+        return Response({'error': USER_NOT_FOUND}, status=404)
+
+    try:
+        resp = http_requests.post(
+            _GCAL_TOKEN_URI,
+            data={
+                'client_id':     settings.GOOGLE_CLIENT_ID,
+                'client_secret': settings.GOOGLE_CLIENT_SECRET,
+                'code':          code,
+                'redirect_uri':  settings.GOOGLE_REDIRECT_URI,
+                'grant_type':    'authorization_code',
+            },
+            timeout=10,
+        )
+        token_data = resp.json()
+        if 'error' in token_data:
+            raise Exception(f"{token_data['error']}: {token_data.get('error_description', '')}")
+
+        access_token  = token_data.get('access_token', '')
+        refresh_token = token_data.get('refresh_token', '')
+        expires_in    = int(token_data.get('expires_in', 3600))
+
+        user.google_access_token  = access_token
+        user.google_refresh_token = refresh_token
+        user.google_token_expiry  = timezone.now() + datetime.timedelta(seconds=expires_in)
+        user.save(update_fields=['google_access_token', 'google_refresh_token', 'google_token_expiry'])
+    except Exception as exc:
+        print(f'[google_auth_callback] Token exchange failed: {exc}')
+        return redirect(f'{_FRONTEND_DASHBOARD}?calendar_error=token_exchange_failed')
+
+    return redirect(f'{_FRONTEND_DASHBOARD}?calendar_connected=true')
+
+
+@csrf_exempt
+@api_view(['GET'])
+@authentication_classes([])
+@permission_classes([AllowAny])
+def user_calendar_current(request, user_id):
+    """
+    GET /api/users/<id>/calendar/current/
+    Returns the Google Calendar event currently happening, or null.
+    Also returns whether the user has connected Google Calendar.
+    Response:
+      { "connected": true, "event": { "current_event": "Team Standup", "type": "meeting" } }
+      { "connected": true, "event": null }
+      { "connected": false, "event": null }
+    """
+    try:
+        user = User.objects.get(id=user_id)
+    except User.DoesNotExist:
+        return Response({'error': USER_NOT_FOUND}, status=404)
+
+    if not user.google_refresh_token:
+        return Response({'connected': False, 'event': None})
+
+    from .calendar_service import get_current_event
+    event = get_current_event(user)
+    return Response({'connected': True, 'event': event})
+

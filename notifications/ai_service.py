@@ -35,6 +35,7 @@ USER CONTEXT:
 - Persona: {persona_description}
 - Current app: {app_name} (category: {app_category})
 - Active schedule block: {block_type} — "{block_title}"
+- Live calendar: {schedule_now_display}
 - Time of day: {time_of_day}
 - Recent notification actions (last 5): {last_interactions}
 - Ignored notifications in last 30 min: {recent_ignored_count}
@@ -66,7 +67,9 @@ def _get_time_of_day(hour: int) -> str:
 
 
 def build_prompt(context: dict) -> str:
-    return CLASSIFICATION_PROMPT.format(**context)
+    ctx = dict(context)
+    ctx['schedule_now_display'] = ctx.get('schedule_now') or 'none'
+    return CLASSIFICATION_PROMPT.format(**ctx)
 
 
 def call_groq(prompt: str) -> dict:
