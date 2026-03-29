@@ -12,8 +12,8 @@ from .models import (
 
 @admin.register(User)
 class UserAdmin(admin.ModelAdmin):
-	list_display = ('name', 'role', 'notification_pref', 'telegram_chat_id')
-	search_fields = ('name', 'role', 'persona_description', 'telegram_chat_id')
+	list_display = ('id', 'name', 'role', 'notification_pref', 'telegram_chat_id')
+	search_fields = ('=id', 'name', 'role', 'persona_description', 'telegram_chat_id')
 	list_filter = ('role', 'notification_pref')
 
 

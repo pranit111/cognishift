@@ -21,6 +21,7 @@ urlpatterns = [
     path('auth/verify-otp/',       views.verify_otp,       name='verify-otp'),
     path('auth/login/send-otp/',   views.send_login_otp,   name='login-send-otp'),
     path('auth/login/verify-otp/', views.login_verify_otp, name='login-verify-otp'),
+    path('users/<uuid:user_id>/app-session/', views.set_app_session,     name='set-app-session'),
     path('auth/google/<uuid:user_id>/init/', views.google_auth_init,     name='google-auth-init'),
     path('auth/google/callback/',            views.google_auth_callback, name='google-auth-callback'),
 ]

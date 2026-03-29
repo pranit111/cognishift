@@ -3,13 +3,13 @@ SMS integration for CogniShift.
 
 Two providers:
   - Kutility (kutility.org)  → OTP / verification SMS
-  - Fast2SMS (fast2sms.com)  → High-priority notification alerts
+  - Twilio                   → High-priority notification alerts + voice calls
 
 API Response formats:
   Kutility  success: SMS-SHOOT-ID/{alpha-numeric}
   Kutility  error:   ERR: {MESSAGE}
-  Fast2SMS  success: { "return": true, "request_id": "...", ... }
-  Fast2SMS  error:   { "return": false, "message": [...] }
+  Twilio    success: HTTP 201, JSON with "sid"
+  Twilio    error:   HTTP 4xx/5xx, JSON with "message"
 """
 import logging
 from typing import Tuple
@@ -21,7 +21,7 @@ logger = logging.getLogger(__name__)
 
 
 class SMSService:
-    """SMS Service — Kutility for OTP, Fast2SMS for notification alerts."""
+    """SMS Service — Kutility for OTP, Twilio for notification alerts and calls."""
 
     def __init__(self):
         # Kutility settings (OTP)
@@ -33,9 +33,14 @@ class SMSService:
         self.kutility_template_id = settings.SMS_TEMPLATE_ID
         self.kutility_pe_id = settings.SMS_PE_ID
 
-        # Fast2SMS settings (notifications)
+        # Fast2SMS settings (kept for custom/bulk SMS)
         self.fast2sms_url = settings.FAST2SMS_API_URL
         self.fast2sms_key = settings.FAST2SMS_API_KEY
+
+        # Twilio settings (priority notifications + calls)
+        self.twilio_account_sid = settings.TWILIO_ACCOUNT_SID
+        self.twilio_auth_token  = settings.TWILIO_AUTH_TOKEN
+        self.twilio_from        = settings.TWILIO_FROM_NUMBER
 
         self.enabled = settings.SMS_ENABLED
 
@@ -102,58 +107,101 @@ class SMSService:
         return self._kutility_call(phone, message)
 
     # ------------------------------------------------------------------ #
-    #  Fast2SMS — notification alerts                                      #
+    #  Twilio — priority notification alerts + voice calls                 #
     # ------------------------------------------------------------------ #
 
-    def _fast2sms_call(self, phone: str, message: str) -> Tuple[bool, str]:
-        """Make a Fast2SMS API request and parse the response."""
-        params = {
-            'authorization': self.fast2sms_key,
-            'message': message,
-            'route': 'q',
-            'numbers': phone,
-            'flash': '0',
-        }
-        headers = {'accept': 'application/json'}
-        try:
-            response = requests.get(self.fast2sms_url, params=params, headers=headers, timeout=10)
-            data = response.json()
-            logger.info("Fast2SMS response for %s: %s", phone, data)
+    @staticmethod
+    def _e164(phone: str) -> str:
+        return '+91' + phone
 
-            if data.get('return'):
-                request_id = data.get('request_id', '')
-                logger.info("Fast2SMS sent. Request ID: %s", request_id)
-                return True, request_id
-            error = str(data.get('message', 'Unknown error'))
-            logger.error("Fast2SMS error: %s", error)
+    def _twilio_sms(self, phone: str, message: str) -> Tuple[bool, str]:
+        """Send an SMS via Twilio REST API."""
+        url = f"https://api.twilio.com/2010-04-01/Accounts/{self.twilio_account_sid}/Messages.json"
+        try:
+            response = requests.post(
+                url,
+                data={"To": self._e164(phone), "From": self.twilio_from, "Body": message},
+                auth=(self.twilio_account_sid, self.twilio_auth_token),
+                timeout=10,
+            )
+            data = response.json()
+            logger.info("Twilio SMS response for %s: %s", phone, data)
+
+            if response.status_code == 201:
+                sid = data.get("sid", "")
+                logger.info("Twilio SMS sent. SID: %s", sid)
+                return True, sid
+            error = data.get("message", f"HTTP {response.status_code}")
+            logger.error("Twilio SMS error: %s", error)
             return False, error
         except requests.RequestException as e:
-            logger.error("Fast2SMS connection error: %s", e)
+            logger.error("Twilio connection error: %s", e)
             return False, f"Connection error: {e}"
         except Exception as e:
-            logger.error("Fast2SMS error: %s", e)
+            logger.error("Twilio error: %s", e)
+            return False, f"Error: {e}"
+
+    def make_call(self, phone: str, twiml_message: str) -> Tuple[bool, str]:
+        """
+        Initiate a Twilio voice call that reads out a message.
+
+        Args:
+            phone:          E.164 number to call, e.g. '+919175426601'
+            twiml_message:  Text the call will read aloud (TwiML <Say> body)
+
+        Returns:
+            (success, call_sid_or_error_message)
+        """
+        if not self.enabled:
+            logger.warning("SMS disabled. Call to %s skipped.", phone)
+            return True, "SMS_DISABLED"
+
+        url = f"https://api.twilio.com/2010-04-01/Accounts/{self.twilio_account_sid}/Calls.json"
+        twiml = f"<Response><Say>{twiml_message}</Say></Response>"
+        try:
+            response = requests.post(
+                url,
+                data={"To": self._e164(phone), "From": self.twilio_from, "Twiml": twiml},
+                auth=(self.twilio_account_sid, self.twilio_auth_token),
+                timeout=15,
+            )
+            data = response.json()
+            logger.info("Twilio call response for %s: %s", phone, data)
+
+            if response.status_code == 201:
+                sid = data.get("sid", "")
+                logger.info("Twilio call initiated. SID: %s", sid)
+                return True, sid
+            error = data.get("message", f"HTTP {response.status_code}")
+            logger.error("Twilio call error: %s", error)
+            return False, error
+        except requests.RequestException as e:
+            logger.error("Twilio call connection error: %s", e)
+            return False, f"Connection error: {e}"
+        except Exception as e:
+            logger.error("Twilio call error: %s", e)
             return False, f"Error: {e}"
 
     def send_notification(self, phone: str, source_app: str, message: str, priority: str) -> Tuple[bool, str]:
         """
-        Send a high-priority notification alert via Fast2SMS.
+        Send a high-priority notification alert via Twilio SMS.
 
         Args:
-            phone:      10-digit phone number
+            phone:      E.164 phone number, e.g. '+919175426601'
             source_app: e.g. 'github', 'slack'
             message:    notification body
             priority:   'low' | 'medium' | 'high'
 
         Returns:
-            (success, request_id_or_error_message)
+            (success, sid_or_error_message)
         """
         if not self.enabled:
             logger.warning("SMS disabled. Notification for %s skipped.", phone)
             return True, "SMS_DISABLED"
 
         sms_text = f"[CogniShift | {priority.upper()}] {source_app}: {message}"
-        logger.info("Sending notification via Fast2SMS to %s (priority=%s)", phone, priority)
-        return self._fast2sms_call(phone, sms_text)
+        logger.info("Sending notification via Twilio to %s (priority=%s)", phone, priority)
+        return self._twilio_sms(phone, sms_text)
 
     def send_custom_sms(self, phone: str, message: str) -> Tuple[bool, str]:
         """

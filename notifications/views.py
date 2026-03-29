@@ -625,6 +625,45 @@ def google_auth_callback(request):
 
 
 @csrf_exempt
+@csrf_exempt
+@api_view(['POST'])
+@authentication_classes([])
+@permission_classes([AllowAny])
+def set_app_session(request, user_id):
+    """
+    POST /api/users/<id>/app-session/
+    Body: { app_name, app_category }
+    Closes any active session and opens a new one.
+    """
+    try:
+        user = User.objects.get(id=user_id)
+    except User.DoesNotExist:
+        return Response({'error': USER_NOT_FOUND}, status=404)
+
+    app_name     = request.data.get('app_name', '').strip()
+    app_category = request.data.get('app_category', '').strip()
+
+    valid_categories = ['productivity', 'communication', 'leisure']
+    if not app_name:
+        return Response({'error': 'app_name is required.'}, status=400)
+    if app_category not in valid_categories:
+        return Response({'error': f'app_category must be one of {valid_categories}'}, status=400)
+
+    AppSession.objects.filter(user=user, is_active=True).update(
+        is_active=False, ended_at=timezone.now()
+    )
+    session = AppSession.objects.create(
+        user=user, app_name=app_name, app_category=app_category,
+    )
+    return Response({
+        'id': str(session.id),
+        'app_name': session.app_name,
+        'app_category': session.app_category,
+        'started_at': session.started_at,
+        'is_active': session.is_active,
+    }, status=201)
+
+
 @api_view(['GET'])
 @authentication_classes([])
 @permission_classes([AllowAny])
