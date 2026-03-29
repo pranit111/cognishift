@@ -1,3 +1,4 @@
+from django.conf import settings
 from django.utils import timezone
 from django.views.decorators.csrf import csrf_exempt
 from django.views.decorators.csrf import csrf_exempt
@@ -223,6 +224,110 @@ def user_notifications(request, user_id):
 
     serializer = NotificationEventSerializer(qs[:100], many=True)
     return Response(serializer.data)
+
+
+@csrf_exempt
+@api_view(['POST'])
+@authentication_classes([])
+@permission_classes([AllowAny])
+def summarise_notifications(request, user_id):
+    """
+    POST /api/users/<id>/summarise/
+    Generates an LLM summary of today's notifications for the user.
+    """
+    try:
+        user = User.objects.get(id=user_id)
+    except User.DoesNotExist:
+        return Response({'error': USER_NOT_FOUND}, status=404)
+
+    today = timezone.now().date()
+    qs = NotificationEvent.objects.filter(user=user, triggered_at__date=today).order_by('triggered_at')
+
+    if not qs.exists():
+        first_name = user.name.split()[0]
+        return Response({'summary': f"No notifications recorded for today, {first_name}. A fresh slate!"})
+
+    lines = []
+    for n in qs:
+        time_str = n.triggered_at.strftime('%H:%M')
+        lines.append(
+            f"- [{time_str}] [{n.source_app}] [priority:{n.ai_priority or '?'}] [status:{n.status}] {n.message}"
+        )
+    notif_block = '\n'.join(lines)
+
+    first_name = user.name.split()[0]
+    total = qs.count()
+    delivered_count = qs.filter(status__in=['sent', 'delivered']).count()
+    blocked_count   = qs.filter(status='blocked').count()
+    queued_count    = qs.filter(status='queued').count()
+    from collections import Counter
+    top_source = Counter(n.source_app for n in qs).most_common(1)
+    top_source_str = top_source[0][0].capitalize() if top_source else '—'
+
+    prompt = (
+        "You are CogniShift, an intelligent notification assistant.\n\n"
+        "User profile:\n"
+        f"  Name: {user.name}\n"
+        f"  Role: {user.role}\n"
+        f"  Persona: {user.persona_description}\n"
+        f"  Notification preference: {user.notification_pref}\n\n"
+        f"Today's notifications ({total} total):\n"
+        f"{notif_block}\n\n"
+        "Respond ONLY with a single valid JSON object — no markdown, no code fences, no extra text.\n"
+        "The object must have exactly these keys:\n"
+        "{\n"
+        '  "headline": "<one punchy sentence capturing the day\'s notification vibe, '
+        f'address {first_name} by first name>",\n'
+        '  "stats": [\n'
+        f'    {{"label": "Total",    "value": "{total}"}},\n'
+        f'    {{"label": "Delivered","value": "{delivered_count}"}},\n'
+        f'    {{"label": "Blocked",  "value": "{blocked_count}"}},\n'
+        f'    {{"label": "Top app",  "value": "{top_source_str}"}}\n'
+        "  ],\n"
+        '  "insights": ["<insight 1 — 1 sentence>", "<insight 2 — 1 sentence>"],\n'
+        '  "tip": "<one concrete, actionable suggestion for the user>"\n'
+        "}\n\n"
+        "insights should cover: what was high-priority and whether it got through, and any pattern worth noting. "
+        "tip should be specific to this user's role and preference. Be warm but concise."
+    )
+
+    import json as _json
+    if getattr(settings, 'GROQ_API_KEY', ''):
+        try:
+            from openai import OpenAI
+            client = OpenAI(api_key=settings.GROQ_API_KEY, base_url='https://api.groq.com/openai/v1')
+            resp = client.chat.completions.create(
+                model='llama-3.3-70b-versatile',
+                messages=[{'role': 'user', 'content': prompt}],
+                temperature=0.4,
+                max_tokens=400,
+            )
+            raw = resp.choices[0].message.content.strip()
+            # Strip markdown code fences if model adds them anyway
+            if raw.startswith('```'):
+                raw = raw.split('```')[1]
+                if raw.startswith('json'):
+                    raw = raw[4:]
+                raw = raw.strip()
+            data = _json.loads(raw)
+            return Response({'summary': data})
+        except _json.JSONDecodeError as e:
+            print(f'[summarise] JSON parse failed: {e} — raw: {raw[:200]}')
+        except Exception as e:
+            print(f'[summarise] Groq failed: {e}')
+
+    # Fallback: structured stats object (no LLM)
+    return Response({'summary': {
+        'headline': f"Hey {first_name}, here's a quick look at your day.",
+        'stats': [
+            {'label': 'Total',     'value': str(total)},
+            {'label': 'Delivered', 'value': str(delivered_count)},
+            {'label': 'Blocked',   'value': str(blocked_count)},
+            {'label': 'Top app',   'value': top_source_str},
+        ],
+        'insights': [],
+        'tip': '',
+    }})
 
 
 @api_view(['GET'])

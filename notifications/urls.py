@@ -11,6 +11,7 @@ urlpatterns = [
     path('users/<uuid:user_id>/set-mode/', views.set_mode, name='set-mode'),
     path('users/<uuid:user_id>/queue/', views.user_queue, name='user-queue'),
     path('users/<uuid:user_id>/notifications/', views.user_notifications, name='user-notifications'),
+    path('users/<uuid:user_id>/summarise/', views.summarise_notifications, name='user-summarise'),
     path('users/<uuid:user_id>/telegram-link/', views.telegram_link, name='telegram-link'),
     path('decisions/', views.list_decisions, name='list-decisions'),
     path('simulate/run/', views.simulate_run, name='simulate-run'),
